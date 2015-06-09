@@ -21,7 +21,7 @@ github.authenticate({
 	token: token
 })
 
-var path = '/Users/josh/code/sync-github-to-levelup/test-output'
+var path = '/Users/josh/code/sync-github-to-fs/test-output'
 var githubOptions = {
 		user: user,
 		repo: repo,
