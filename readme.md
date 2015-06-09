@@ -17,7 +17,8 @@ Then, install and require this module, and do this stuff:
 	var repoDetails = {
 		user: 'TehShrike',
 		repo: 'sync-github-to-fs',
-		ref: 'heads/master'
+		ref: 'heads/master',
+		simultaneousRequests: 3 // defaults to 5
 	}
 
 	sync(github, repoDetails, '/some/local/directory', function(err, res) {

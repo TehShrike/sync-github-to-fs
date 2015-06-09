@@ -7,6 +7,7 @@ var crypto = require('crypto')
 var extend = require('extend')
 var fs = require('fs')
 var mkdirp = Promise.denodeify(require('mkdirp'))
+var Bagpipe = require('bagpipe')
 
 var stat = Promise.denodeify(fs.stat)
 var readDir = Promise.denodeify(fs.readdir)
@@ -14,36 +15,40 @@ var writeFile = Promise.denodeify(fs.writeFile)
 var unlink = Promise.denodeify(fs.unlink)
 
 module.exports = Promise.nodeify(function sync(github, githubOptions, path) {
+	var bag = new Bagpipe(githubOptions.simultaneousRequests || 5)
 	return Promise.all([ getPathState(path).then(trimKeys(path)), getGithubState(github, githubOptions) ]).then(function(states) {
 		var pathState = states[0]
 		var githubState = states[1]
 		var deletionPromises = getPathsToDelete(pathState, githubState).map(deleteFile(path))
-		var downloadPromises = getPathsToDownload(pathState, githubState).map(downloadFile(path, github, githubOptions))
+		var downloadPromises = getPathsToDownload(pathState, githubState).map(downloadFile(bag, path, github, githubOptions))
 		return Promise.all(deletionPromises.concat(downloadPromises))
 	}).catch(function(err) {
 		console.error(err.stack || err)
 	})
 })
 
-function downloadFile(originalPath, github, githubOptions) {
+function downloadFile(bag, originalPath, github, githubOptions) {
 	return function(state) {
 		return new Promise(function(resolve, reject) {
-			var localPath = joinPath(originalPath, state.path)
-			var directory = dirname(localPath)
-			github.gitdata.getBlob({
-				user: githubOptions.user,
-				repo: githubOptions.repo,
-				sha: state.sha
-			}, function(err, res) {
-				if (err)  {
-					reject(err)
-				} else {
-					resolve(mkdirp(directory).then(function() {
-						return writeFile(localPath, new Buffer(res.content, 'base64'))
-					}).then(function() {
-						return 'downloaded ' + state.path
-					}))
-				}
+			bag.push(function(done) {
+				var localPath = joinPath(originalPath, state.path)
+				var directory = dirname(localPath)
+				github.gitdata.getBlob({
+					user: githubOptions.user,
+					repo: githubOptions.repo,
+					sha: state.sha
+				}, function(err, res) {
+					if (err)  {
+						reject(err)
+					} else {
+						resolve(mkdirp(directory).then(function() {
+							return writeFile(localPath, new Buffer(res.content, 'base64'))
+						}).then(function() {
+							done()
+							return 'downloaded ' + state.path
+						}))
+					}
+				})
 			})
 		})
 	}
