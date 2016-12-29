@@ -1,11 +1,11 @@
-var sync = require('./')
-var GitHubApi = require('github')
+const sync = require('./')
+const GitHubApi = require('github')
 
-var token = ''
-var user = ''
-var repo = ''
+const token = ''
+const owner = ''
+const repo = ''
 
-var github = new GitHubApi({
+const github = new GitHubApi({
 	// required
 	version: '3.0.0',
 	// optional
@@ -21,11 +21,11 @@ github.authenticate({
 	token: token
 })
 
-var path = '/Users/josh/code/sync-github-to-fs/test-output'
-var githubOptions = {
-		user: user,
-		repo: repo,
-		ref: 'heads/test'
+const path = '/Users/josh/code/sync-github-to-fs/test-output'
+const githubOptions = {
+	owner,
+	repo,
+	ref: 'heads/master'
 }
 sync(github, githubOptions, path, function(err, result) {
 	console.log('done:', result)

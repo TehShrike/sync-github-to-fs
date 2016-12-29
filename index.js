@@ -1,54 +1,49 @@
-var Promise = require('promise')
-var fs = require('fs')
-var joinPath = require('path').join
-var dirname = require('path').dirname
-var platformSeparator = require('path').sep
-var crypto = require('crypto')
-var extend = require('extend')
-var fs = require('fs')
-var mkdirp = Promise.denodeify(require('mkdirp'))
-var Bagpipe = require('bagpipe')
+const fs = require('fs')
+const crypto = require('crypto')
+const { join: joinPath, sep: platformSeparator, dirname } = require('path')
 
-var stat = Promise.denodeify(fs.stat)
-var readDir = Promise.denodeify(fs.readdir)
-var writeFile = Promise.denodeify(fs.writeFile)
-var unlink = Promise.denodeify(fs.unlink)
+const denodeify = require('then-denodeify')
+const nodeify = require('then-nodeify')
+const PromiseQueue = require('p-queue')
 
-module.exports = Promise.nodeify(function sync(github, githubOptions, path) {
-	var bag = new Bagpipe(githubOptions.simultaneousRequests || 5)
-	return Promise.all([ getPathState(path).then(trimKeys(path)), getGithubState(github, githubOptions) ]).then(function(states) {
-		var pathState = states[0]
-		var githubState = states[1]
-		var deletionPromises = getPathsToDelete(pathState, githubState).map(deleteFile(path))
-		var downloadPromises = getPathsToDownload(pathState, githubState).map(downloadFile(bag, path, github, githubOptions))
+const mkdirp = denodeify(require('mkdirp'))
+
+const stat = denodeify(fs.stat)
+const readDir = denodeify(fs.readdir)
+const writeFile = denodeify(fs.writeFile)
+const unlink = denodeify(fs.unlink)
+
+module.exports = nodeify(function sync(github, githubOptions, path) {
+	const queue = new PromiseQueue({
+		concurrency: githubOptions.simultaneousRequests || 5
+	})
+
+	const { owner, repo } = githubOptions
+
+	return Promise.all([
+		getPathState(path).then(trimKeys(path)),
+		getGithubState(github, githubOptions)
+	]).then(([ pathState, githubState ]) => {
+		const deletionPromises = getPathsToDelete(pathState, githubState).map(deleteFile(path))
+		const downloadPromises = getPathsToDownload(pathState, githubState).map(downloadFile({ queue, path, github, owner, repo }))
 		return Promise.all(deletionPromises.concat(downloadPromises))
-	}).catch(function(err) {
-		console.error(err.stack || err)
 	})
 })
 
-function downloadFile(bag, originalPath, github, githubOptions) {
+function downloadFile({ queue, path: originalPath, github, owner, repo }) {
 	return function(state) {
-		return new Promise(function(resolve, reject) {
-			bag.push(function(done) {
-				var localPath = joinPath(originalPath, state.path)
-				var directory = dirname(localPath)
-				github.gitdata.getBlob({
-					user: githubOptions.user,
-					repo: githubOptions.repo,
-					sha: state.sha
-				}, function(err, res) {
-					if (err)  {
-						reject(err)
-					} else {
-						resolve(mkdirp(directory).then(function() {
-							return writeFile(localPath, new Buffer(res.content, 'base64'))
-						}).then(function() {
-							done()
-							return 'downloaded ' + state.path
-						}))
-					}
-				})
+		const localPath = joinPath(originalPath, state.path)
+		const directory = dirname(localPath)
+
+		return queue.add(() => {
+			return github.gitdata.getBlob({
+				owner,
+				repo,
+				sha: state.sha
+			}).then(({ content }) => {
+				return mkdirp(directory)
+					.then(() => writeFile(localPath, Buffer.from(content, 'base64')))
+					.then(() => 'downloaded ' + state.path)
 			})
 		})
 	}
@@ -56,10 +51,8 @@ function downloadFile(bag, originalPath, github, githubOptions) {
 
 function deleteFile(originalPath) {
 	return function(relativePath) {
-		var wholePath = joinPath(originalPath, relativePath)
-		return unlink(wholePath).then(function() {
-			return 'deleted ' + wholePath
-		})
+		const wholePath = joinPath(originalPath, relativePath)
+		return unlink(wholePath).then(() => 'deleted ' + wholePath)
 	}
 }
 
@@ -75,7 +68,7 @@ function getPathsToDownload(pathState, githubState) {
 		return !pathState[path] || pathState[path] !== githubState[path]
 	}
 
-	return Object.keys(githubState).filter(shouldDownload).map(function(path) {
+	return Object.keys(githubState).filter(shouldDownload).map(path => {
 		return {
 			path: path,
 			sha: githubState[path]
@@ -120,15 +113,15 @@ function getDirectoryState(path) {
 		return Promise.all(paths.map(getPathState))
 	}).then(function(pathStates) {
 		return pathStates.length ? pathStates.reduce(function(memo, state) {
-			return extend(memo, state)
+			return Object.assign({}, memo, state)
 		}) : {}
 	})
 }
 
 function getFileState(path, filesize) {
 	return new Promise(function(resolve, reject) {
-		var shasum = crypto.createHash('sha1')
-		var fsstream = fs.createReadStream(path)
+		const shasum = crypto.createHash('sha1')
+		const fsstream = fs.createReadStream(path)
 
 		// shasum.setEncoding('hex')
 
@@ -138,7 +131,7 @@ function getFileState(path, filesize) {
 			shasum.update(data)
 		})
 		fsstream.on('end', function() {
-			var o = {}
+			const o = {}
 			o[path] = shasum.digest('hex')
 			resolve(o)
 		})
@@ -148,14 +141,14 @@ function getFileState(path, filesize) {
 }
 
 function getGithubState(github, githubOptions) {
-	var getReference = Promise.denodeify(github.gitdata.getReference)
-	var getTree = Promise.denodeify(github.gitdata.getTree)
+	const getReference = denodeify(github.gitdata.getReference)
+	const getTree = denodeify(github.gitdata.getTree)
 
 	return getReference(githubOptions).then(function getCommitSha(res) {
 		return res.object.sha
-	}).then(function(sha) {
+	}).then(sha => {
 		return getTree({
-			user: githubOptions.user,
+			owner: githubOptions.owner,
 			repo: githubOptions.repo,
 			sha: sha,
 			recursive: true
@@ -164,11 +157,11 @@ function getGithubState(github, githubOptions) {
 		return tree.tree.filter(function(fileThingy) {
 			return fileThingy.type === 'blob'
 		}).map(function(fileThingy) {
-			var o = {}
+			const o = {}
 			o[fileThingy.path] = fileThingy.sha
 			return o
 		}).reduce(function(memo, state) {
-			return extend(memo, state)
+			return Object.assign({}, memo, state)
 		}, {})
 	})
 }

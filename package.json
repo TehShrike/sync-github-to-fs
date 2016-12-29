@@ -21,10 +21,10 @@
   },
   "homepage": "https://github.com/TehShrike/sync-github-to-fs",
   "dependencies": {
-    "bagpipe": "^0.3.5",
-    "extend": "^2.0.0",
-    "github": "^0.2.3",
+    "github": "7.2.0",
     "mkdirp": "^0.5.0",
-    "promise": "^6.0.1"
+    "p-queue": "0.2.0",
+    "then-denodeify": "1.0.0",
+    "then-nodeify": "1.0.1"
   }
 }
