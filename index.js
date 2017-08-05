@@ -21,7 +21,7 @@ module.exports = nodeify(function sync(github, githubOptions, path) {
 	const { owner, repo } = githubOptions
 
 	return Promise.all([
-		getPathState(path).then(trimKeys(path)),
+		getDiskPathState(path).then(makePropertyPrefixTrimmer(path)),
 		getGithubState(github, githubOptions)
 	]).then(([ pathState, githubState ]) => {
 		const deletionPromises = getPathsToDelete(pathState, githubState).map(deleteFile(path))
@@ -40,9 +40,9 @@ function downloadFile({ queue, path: originalPath, github, owner, repo }) {
 				owner,
 				repo,
 				sha: state.sha
-			}).then(({ content }) => {
+			}).then(response => {
 				return mkdirp(directory)
-					.then(() => writeFile(localPath, Buffer.from(content, 'base64')))
+					.then(() => writeFile(localPath, Buffer.from(response.data.content, 'base64')))
 					.then(() => 'downloaded ' + state.path)
 			})
 		})
@@ -76,15 +76,15 @@ function getPathsToDownload(pathState, githubState) {
 	})
 }
 
-function trimKeys(beginning) {
+function makePropertyPrefixTrimmer(prefix) {
 	function trim(key) {
-		key = key.indexOf(beginning) === 0 ?  key.substr(beginning.length) : key
+		key = key.indexOf(prefix) === 0 ?  key.substr(prefix.length) : key
 		if (key[0] === platformSeparator) {
 			key = key.substring(1)
 		}
 		return key
 	}
-	return function(input) {
+	return function trimPrefixOffOfProperties(input) {
 		return Object.keys(input).reduce(function(memo, key) {
 			memo[trim(key)] = input[key]
 			return memo
@@ -92,7 +92,7 @@ function trimKeys(beginning) {
 	}
 }
 
-function getPathState(path) {
+function getDiskPathState(path) {
 	return stat(path).then(function(stats) {
 		if (stats.isDirectory()) {
 			return getDirectoryState(path)
@@ -106,20 +106,18 @@ function getPathState(path) {
 
 function getDirectoryState(path) {
 	return readDir(path).then(function mapToPaths(files) {
-		return files.map(function(filename) {
-			return joinPath(path, filename)
-		})
-	}).then(function(paths) {
-		return Promise.all(paths.map(getPathState))
-	}).then(function(pathStates) {
-		return pathStates.length ? pathStates.reduce(function(memo, state) {
-			return Object.assign({}, memo, state)
-		}) : {}
+		return files.map(filename => joinPath(path, filename))
+	}).then(
+		paths => Promise.all(paths.map(getDiskPathState))
+	).then(pathStates => {
+		return pathStates.length
+			? pathStates.reduce((memo, state) => Object.assign({}, memo, state))
+			: {}
 	})
 }
 
 function getFileState(path, filesize) {
-	return new Promise(function(resolve, reject) {
+	return new Promise((resolve, reject) => {
 		const shasum = crypto.createHash('sha1')
 		const fsstream = fs.createReadStream(path)
 
@@ -127,14 +125,8 @@ function getFileState(path, filesize) {
 
 		shasum.update('blob ' + filesize + '\0', 'utf8')
 
-		fsstream.on('data', function(data) {
-			shasum.update(data)
-		})
-		fsstream.on('end', function() {
-			const o = {}
-			o[path] = shasum.digest('hex')
-			resolve(o)
-		})
+		fsstream.on('data', data => shasum.update(data))
+		fsstream.on('end', () => resolve({ [path]: shasum.digest('hex') }))
 		fsstream.on('error', reject)
 		shasum.on('error', reject)
 	})
@@ -144,8 +136,8 @@ function getGithubState(github, githubOptions) {
 	const getReference = denodeify(github.gitdata.getReference)
 	const getTree = denodeify(github.gitdata.getTree)
 
-	return getReference(githubOptions).then(function getCommitSha(res) {
-		return res.object.sha
+	return getReference(githubOptions).then(function getCommitSha(response) {
+		return response.data.object.sha
 	}).then(sha => {
 		return getTree({
 			owner: githubOptions.owner,
@@ -153,8 +145,8 @@ function getGithubState(github, githubOptions) {
 			sha: sha,
 			recursive: true
 		})
-	}).then(function(tree) {
-		return tree.tree.filter(function(fileThingy) {
+	}).then(function(response) {
+		return response.data.tree.filter(function(fileThingy) {
 			return fileThingy.type === 'blob'
 		}).map(function(fileThingy) {
 			const o = {}

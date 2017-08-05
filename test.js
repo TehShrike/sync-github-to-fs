@@ -2,12 +2,12 @@ const sync = require('./')
 const GitHubApi = require('github')
 
 const token = ''
-const owner = ''
-const repo = ''
+const owner = 'TehShrike'
+const repo = 'sync-github-to-fs'
 
 const github = new GitHubApi({
 	// required
-	version: '3.0.0',
+	// version: '3.0.0',
 	// optional
 	// debug: true,
 	timeout: 5000,
@@ -16,10 +16,10 @@ const github = new GitHubApi({
 	}
 })
 
-github.authenticate({
-	type: 'oauth',
-	token: token
-})
+// github.authenticate({
+// 	type: 'oauth',
+// 	token: token
+// })
 
 const path = '/Users/josh/code/sync-github-to-fs/test-output'
 const githubOptions = {
@@ -28,5 +28,8 @@ const githubOptions = {
 	ref: 'heads/master'
 }
 sync(github, githubOptions, path, function(err, result) {
+	if (err) {
+		throw err
+	}
 	console.log('done:', result)
 })
